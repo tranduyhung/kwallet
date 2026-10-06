@@ -1,7 +1,14 @@
 use clap::{Parser, Subcommand};
-use std::{error::Error, fmt};
+use kaspa_wrpc_client::prelude::RpcApi;
+use kaspa_wrpc_client::{
+    KaspaRpcClient, WrpcEncoding,
+    client::{ConnectOptions, ConnectStrategy},
+    prelude::GetServerInfoResponse,
+};
+use std::{error::Error, fmt, process, time::Duration};
 
 const SOMPI_PER_KAS: u64 = 100_000_000;
+const DEFAULT_NODE_URL: &str = "ws://127.0.0.1:17610";
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -29,6 +36,12 @@ enum Command {
         /// Amount in KAS, up to 8 decimals (e.g. 1.5)
         #[arg(value_name = "AMOUNT_KAS", value_parser = parse_send_amount)]
         amount_sompi: u64,
+    },
+    /// Print node info
+    Info {
+        /// URL of the KAS node to connect to
+        #[arg(long, value_name = "URL", default_value = DEFAULT_NODE_URL)]
+        url: String,
     },
 }
 
@@ -110,7 +123,8 @@ fn format_sompi(s: u64) -> String {
     format!("{}.{:08}", s / SOMPI_PER_KAS, s % SOMPI_PER_KAS)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match cli.command {
@@ -124,7 +138,82 @@ fn main() {
             format_sompi(amount_sompi),
             to
         ),
+        Command::Info { url } => {
+            if let Err(e) = info(&url).await {
+                eprintln!("Error occurred while fetching info from {url}: {e}");
+                process::exit(1);
+            }
+        }
     }
+}
+
+async fn print_server_info(
+    client: &KaspaRpcClient,
+) -> Result<(), Box<kaspa_wrpc_client::error::Error>> {
+    // Retrieve and show Kaspa node information.
+    let GetServerInfoResponse {
+        is_synced,
+        server_version,
+        network_id,
+        virtual_daa_score,
+        ..
+    } = client
+        .get_server_info()
+        .await
+        .map_err(kaspa_wrpc_client::error::Error::from)?;
+
+    println!("Node version: {server_version}");
+    println!("Network: {network_id}");
+    println!("Node is synced: {is_synced}");
+    println!("Virtual DAA score: {virtual_daa_score}");
+
+    Ok(())
+}
+
+async fn info(url: &str) -> Result<(), Box<kaspa_wrpc_client::error::Error>> {
+    // Select encoding method to use, depending on node settings.
+    let encoding = WrpcEncoding::Borsh;
+
+    // Resolver is not used, it is a pool of public nodes.
+    let resolver = None;
+
+    // Define the network your Kaspa node is connected to.
+    let selected_network = None;
+
+    // Advanced options.
+    let subscription_context = None;
+
+    // Create new wRPC client with parameters defined above
+    let client = KaspaRpcClient::new(
+        encoding,
+        Some(url),
+        resolver,
+        selected_network,
+        subscription_context,
+    )?;
+
+    // Advanced connection options.
+    let timeout = 5_000;
+    let options = ConnectOptions {
+        block_async_connect: true,
+        connect_timeout: Some(Duration::from_millis(timeout)),
+        strategy: ConnectStrategy::Fallback, // Retry would hang forever on an unreachable node.
+        ..Default::default()
+    };
+
+    // Connect to selected Kaspa node.
+    client.connect(Some(options)).await?;
+
+    println!("Connected to {url}");
+
+    let result = print_server_info(&client).await;
+
+    // Disconnect client from Kaspa node.
+    client.disconnect().await?;
+
+    println!("Disconnected from {url}");
+
+    result
 }
 
 #[cfg(test)]
@@ -242,5 +331,11 @@ mod tests {
                 amount_sompi: 150_000_000
             }
         );
+        assert_eq!(
+            parse(&["kwallet", "info"]),
+            Command::Info {
+                url: DEFAULT_NODE_URL.to_string()
+            }
+        )
     }
 }
