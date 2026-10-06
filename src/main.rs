@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kaspa_wrpc_client::prelude::RpcApi;
+use kaspa_wrpc_client::prelude::{RpcApi, RpcError};
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -69,6 +69,33 @@ impl fmt::Display for AmountError {
 }
 
 impl Error for AmountError {}
+
+#[derive(Debug)]
+enum KwalletError {
+    Rpc(Box<kaspa_wrpc_client::error::Error>),
+}
+
+impl fmt::Display for KwalletError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            KwalletError::Rpc(e) => write!(f, "RPC error: {e}"),
+        }
+    }
+}
+
+impl Error for KwalletError {}
+
+impl From<kaspa_wrpc_client::error::Error> for KwalletError {
+    fn from(e: kaspa_wrpc_client::error::Error) -> Self {
+        KwalletError::Rpc(Box::new(e))
+    }
+}
+
+impl From<RpcError> for KwalletError {
+    fn from(e: RpcError) -> Self {
+        KwalletError::Rpc(Box::new(kaspa_wrpc_client::error::Error::from(e)))
+    }
+}
 
 fn parse_send_amount(s: &str) -> Result<u64, AmountError> {
     match parse_kas(s)? {
@@ -147,9 +174,7 @@ async fn main() {
     }
 }
 
-async fn print_server_info(
-    client: &KaspaRpcClient,
-) -> Result<(), Box<kaspa_wrpc_client::error::Error>> {
+async fn print_server_info(client: &KaspaRpcClient) -> Result<(), KwalletError> {
     // Retrieve and show Kaspa node information.
     let GetServerInfoResponse {
         is_synced,
@@ -157,10 +182,7 @@ async fn print_server_info(
         network_id,
         virtual_daa_score,
         ..
-    } = client
-        .get_server_info()
-        .await
-        .map_err(kaspa_wrpc_client::error::Error::from)?;
+    } = client.get_server_info().await?;
 
     println!("Node version: {server_version}");
     println!("Network: {network_id}");
@@ -170,7 +192,7 @@ async fn print_server_info(
     Ok(())
 }
 
-async fn info(url: &str) -> Result<(), Box<kaspa_wrpc_client::error::Error>> {
+async fn info(url: &str) -> Result<(), KwalletError> {
     // Select encoding method to use, depending on node settings.
     let encoding = WrpcEncoding::Borsh;
 
