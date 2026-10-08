@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use kaspa_wrpc_client::prelude::{RpcApi, RpcError};
+use kaspa_wrpc_client::prelude::{NetworkId, NetworkType, RpcApi, RpcError};
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -9,6 +9,7 @@ use std::{error::Error, fmt, process, time::Duration};
 
 const SOMPI_PER_KAS: u64 = 100_000_000;
 const DEFAULT_NODE_URL: &str = "ws://127.0.0.1:17610";
+const ALLOWED_NETWORK: NetworkId = NetworkId::new(NetworkType::Devnet);
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -73,12 +74,20 @@ impl Error for AmountError {}
 #[derive(Debug)]
 enum KwalletError {
     Rpc(Box<kaspa_wrpc_client::error::Error>),
+    WrongNetwork {
+        expected: NetworkId,
+        actual: NetworkId,
+    },
 }
 
 impl fmt::Display for KwalletError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             KwalletError::Rpc(e) => write!(f, "RPC error: {e}"),
+            KwalletError::WrongNetwork { expected, actual } => write!(
+                f,
+                "refusing to continue: node is on {actual}, kwallet only supports {expected}"
+            ),
         }
     }
 }
@@ -94,6 +103,17 @@ impl From<kaspa_wrpc_client::error::Error> for KwalletError {
 impl From<RpcError> for KwalletError {
     fn from(e: RpcError) -> Self {
         KwalletError::Rpc(Box::new(kaspa_wrpc_client::error::Error::from(e)))
+    }
+}
+
+fn check_network(actual: NetworkId) -> Result<(), KwalletError> {
+    if actual == ALLOWED_NETWORK {
+        Ok(())
+    } else {
+        Err(KwalletError::WrongNetwork {
+            expected: ALLOWED_NETWORK,
+            actual,
+        })
     }
 }
 
@@ -183,6 +203,8 @@ async fn print_server_info(client: &KaspaRpcClient) -> Result<(), KwalletError> 
         virtual_daa_score,
         ..
     } = client.get_server_info().await?;
+
+    check_network(network_id)?;
 
     println!("Node version: {server_version}");
     println!("Network: {network_id}");
@@ -359,5 +381,26 @@ mod tests {
                 url: DEFAULT_NODE_URL.to_string()
             }
         )
+    }
+
+    #[test]
+    fn reject_wrong_network() {
+        let networks = [
+            NetworkId::new(NetworkType::Mainnet),
+            NetworkId::with_suffix(NetworkType::Testnet, 10),
+        ];
+
+        for network in networks {
+            assert!(matches!(
+                check_network(network),
+                Err(KwalletError::WrongNetwork { expected, actual })
+                    if expected == ALLOWED_NETWORK && actual == network
+            ))
+        }
+    }
+
+    #[test]
+    fn accept_allowed_network() {
+        assert!(matches!(check_network(ALLOWED_NETWORK), Ok(())));
     }
 }
