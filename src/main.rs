@@ -51,12 +51,12 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::New => match keys::generate_phrase() {
-            Ok(phrase) => {
+        Command::New => match keys::generate_mnemonic() {
+            Ok(mnemonic) => {
                 println!("DEVNET ONLY: never use this phrase for real funds.");
                 println!("Write it down now; it will not be shown again.");
                 println!();
-                println!("{phrase}");
+                println!("{}", mnemonic.phrase());
             }
             Err(e) => {
                 eprintln!("Error occurred while generating phrase: {e}");

@@ -2,11 +2,11 @@ use kaspa_bip32::{Language::English, Mnemonic, WordCount::Words24};
 
 use crate::error::KwalletError;
 
-/// Generate a fresh random 24-word BIP39 mnemonic phrase.
-pub fn generate_phrase() -> Result<String, KwalletError> {
+/// Generate a fresh random 24-word BIP39 mnemonic.
+pub fn generate_mnemonic() -> Result<Mnemonic, KwalletError> {
     let mnemonic = Mnemonic::random(Words24, English)?;
 
-    Ok(mnemonic.phrase().to_string())
+    Ok(mnemonic)
 }
 
 #[cfg(test)]
@@ -15,13 +15,23 @@ mod tests {
 
     #[test]
     fn generate_24_words() {
-        let phrase = generate_phrase().unwrap();
+        let mnemonic = generate_mnemonic().unwrap();
 
-        assert_eq!(phrase.split_whitespace().count(), 24);
+        assert_eq!(mnemonic.phrase().split_whitespace().count(), 24);
     }
 
     #[test]
     fn generate_different_phrases() {
-        assert_ne!(generate_phrase().unwrap(), generate_phrase().unwrap());
+        let a = generate_mnemonic().unwrap();
+        let b = generate_mnemonic().unwrap();
+
+        assert_ne!(a.phrase(), b.phrase());
+    }
+
+    #[test]
+    fn generated_phrase_is_valid() {
+        let mnemonic = generate_mnemonic().unwrap();
+
+        assert!(Mnemonic::validate(mnemonic.phrase(), Some(English)));
     }
 }
