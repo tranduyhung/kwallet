@@ -194,40 +194,19 @@ async fn main() {
     }
 }
 
-async fn print_server_info(client: &KaspaRpcClient) -> Result<(), KwalletError> {
-    // Retrieve and show Kaspa node information.
-    let GetServerInfoResponse {
-        is_synced,
-        server_version,
-        network_id,
-        virtual_daa_score,
-        ..
-    } = client.get_server_info().await?;
-
-    check_network(network_id)?;
-
-    println!("Node version: {server_version}");
-    println!("Network: {network_id}");
-    println!("Node is synced: {is_synced}");
-    println!("Virtual DAA score: {virtual_daa_score}");
-
-    Ok(())
-}
-
-async fn info(url: &str) -> Result<(), KwalletError> {
-    // Select encoding method to use, depending on node settings.
+/// Connects to the node and refuses to continue unless it is on `ALLOWED_NETWORK`.
+/// Every command that talks to a node must get its client from here.
+async fn connect_verified(
+    url: &str,
+) -> Result<(KaspaRpcClient, GetServerInfoResponse), KwalletError> {
     let encoding = WrpcEncoding::Borsh;
 
-    // Resolver is not used, it is a pool of public nodes.
     let resolver = None;
 
-    // Define the network your Kaspa node is connected to.
     let selected_network = None;
 
-    // Advanced options.
     let subscription_context = None;
 
-    // Create new wRPC client with parameters defined above
     let client = KaspaRpcClient::new(
         encoding,
         Some(url),
@@ -236,7 +215,6 @@ async fn info(url: &str) -> Result<(), KwalletError> {
         subscription_context,
     )?;
 
-    // Advanced connection options.
     let timeout = 5_000;
     let options = ConnectOptions {
         block_async_connect: true,
@@ -245,21 +223,57 @@ async fn info(url: &str) -> Result<(), KwalletError> {
         ..Default::default()
     };
 
-    // Connect to selected Kaspa node.
     client.connect(Some(options)).await?;
 
-    println!("Connected to {url}");
+    match fetch_verified_info(&client).await {
+        Ok(info) => Ok((client, info)),
+        Err(e) => {
+            if let Err(disconnect_err) = client.disconnect().await {
+                eprintln!("warning: failed to disconnect from {url}: {disconnect_err}");
+            }
 
-    let server_info_result = print_server_info(&client).await;
-
-    let disconnection_result = client.disconnect().await.map_err(KwalletError::from);
-
-    if disconnection_result.is_ok() {
-        println!("Disconnected from {url}");
+            Err(e)
+        }
     }
+}
 
-    // The work error (e.g. WrongNetwork) wins over a cleanup error from disconnect.
-    server_info_result.and(disconnection_result)
+fn print_server_info(info: &GetServerInfoResponse) {
+    let GetServerInfoResponse {
+        is_synced,
+        server_version,
+        network_id,
+        virtual_daa_score,
+        ..
+    } = info;
+
+    println!("Node version: {server_version}");
+    println!("Network: {network_id}");
+    println!("Node is synced: {is_synced}");
+    println!("Virtual DAA score: {virtual_daa_score}");
+}
+
+async fn fetch_verified_info(
+    client: &KaspaRpcClient,
+) -> Result<GetServerInfoResponse, KwalletError> {
+    let info = client.get_server_info().await?;
+
+    check_network(info.network_id)?;
+
+    Ok(info)
+}
+
+async fn info(url: &str) -> Result<(), KwalletError> {
+    let (client, server_info) = connect_verified(url).await?;
+
+    println!("connected to {url}");
+
+    print_server_info(&server_info);
+
+    client.disconnect().await?;
+
+    println!("disconnected from {url}");
+
+    Ok(())
 }
 
 #[cfg(test)]
