@@ -7,5 +7,6 @@ authors = ["Hung Tran"]
 
 [dependencies]
 clap = { version = "4.4", features = ["derive"] }
+kaspa-bip32 = "2.1.0"
 kaspa-wrpc-client = "2.1.0"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }

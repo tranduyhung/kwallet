@@ -1,5 +1,6 @@
 mod amount;
 mod error;
+mod keys;
 mod node;
 
 use amount::{format_sompi, parse_send_amount};
@@ -50,7 +51,19 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::New => println!("not implemented yet"),
+        Command::New => match keys::generate_phrase() {
+            Ok(phrase) => {
+                println!("DEVNET ONLY: never use this phrase for real funds.");
+                println!("Write it down now; it will not be shown again.");
+                println!();
+                println!("{phrase}");
+            }
+            Err(e) => {
+                eprintln!("Error occurred while generating phrase: {e}");
+
+                return ExitCode::FAILURE;
+            }
+        },
         Command::Balance { address } => match address {
             Some(addr) => println!("balance for {addr}: not implemented yet"),
             None => println!("balance for all wallet addresses: not implemented yet"),
