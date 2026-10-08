@@ -5,11 +5,13 @@ use kaspa_wrpc_client::{
     client::{ConnectOptions, ConnectStrategy},
     prelude::GetServerInfoResponse,
 };
-use std::{error::Error, fmt, process, time::Duration};
+use std::process::ExitCode;
+use std::{error::Error, fmt, time::Duration};
 
 const SOMPI_PER_KAS: u64 = 100_000_000;
 const DEFAULT_NODE_URL: &str = "ws://127.0.0.1:17610";
 const ALLOWED_NETWORK: NetworkId = NetworkId::new(NetworkType::Devnet);
+const CONNECT_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -171,7 +173,7 @@ fn format_sompi(s: u64) -> String {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
@@ -188,10 +190,12 @@ async fn main() {
         Command::Info { url } => {
             if let Err(e) = info(&url).await {
                 eprintln!("Error occurred while fetching info from {url}: {e}");
-                process::exit(1);
+                return ExitCode::FAILURE;
             }
         }
     }
+
+    ExitCode::SUCCESS
 }
 
 /// Connects to the node and refuses to continue unless it is on `ALLOWED_NETWORK`.
@@ -215,10 +219,9 @@ async fn connect_verified(
         subscription_context,
     )?;
 
-    let timeout = 5_000;
     let options = ConnectOptions {
         block_async_connect: true,
-        connect_timeout: Some(Duration::from_millis(timeout)),
+        connect_timeout: Some(Duration::from_millis(CONNECT_TIMEOUT_MS)),
         strategy: ConnectStrategy::Fallback, // Retry would hang forever on an unreachable node.
         ..Default::default()
     };
