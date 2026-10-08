@@ -250,14 +250,16 @@ async fn info(url: &str) -> Result<(), KwalletError> {
 
     println!("Connected to {url}");
 
-    let result = print_server_info(&client).await;
+    let server_info_result = print_server_info(&client).await;
 
-    // Disconnect client from Kaspa node.
-    client.disconnect().await?;
+    let disconnection_result = client.disconnect().await.map_err(KwalletError::from);
 
-    println!("Disconnected from {url}");
+    if disconnection_result.is_ok() {
+        println!("Disconnected from {url}");
+    }
 
-    result
+    // The work error (e.g. WrongNetwork) wins over a cleanup error from disconnect.
+    server_info_result.and(disconnection_result)
 }
 
 #[cfg(test)]
