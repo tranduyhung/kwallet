@@ -1,4 +1,6 @@
-use kaspa_bip32::{ExtendedPrivateKey, Language::English, Mnemonic, SecretKey, WordCount::Words24};
+use kaspa_bip32::{
+    DerivationPath, ExtendedPrivateKey, Language::English, Mnemonic, SecretKey, WordCount::Words24,
+};
 
 use crate::error::KwalletError;
 
@@ -12,9 +14,19 @@ pub fn generate_mnemonic() -> Result<Mnemonic, KwalletError> {
 /// Derive the root (master) extended private key from a mnemonic, without a passphrase.
 pub fn master_key(mnemonic: &Mnemonic) -> Result<ExtendedPrivateKey<SecretKey>, KwalletError> {
     let seed = mnemonic.to_seed("");
-    let master = ExtendedPrivateKey::<SecretKey>::new(seed)?;
+    let master = ExtendedPrivateKey::new(seed)?;
 
     Ok(master)
+}
+
+/// Derive the key for Kaspa's first receive address (m/44'/111111'/0'/0/0).
+pub fn first_receive_key(
+    master: ExtendedPrivateKey<SecretKey>,
+) -> Result<ExtendedPrivateKey<SecretKey>, KwalletError> {
+    let path: DerivationPath = "m/44'/111111'/0'/0/0".parse()?;
+    let child = master.derive_path(&path)?;
+
+    Ok(child)
 }
 
 #[cfg(test)]
@@ -48,5 +60,16 @@ mod tests {
         let mnemonic = generate_mnemonic().unwrap();
 
         assert!(master_key(&mnemonic).is_ok());
+    }
+
+    #[test]
+    fn first_receive_key_differs_from_master() {
+        let mnemonic = generate_mnemonic().unwrap();
+        let master = master_key(&mnemonic).unwrap();
+
+        let child = first_receive_key(master.clone());
+
+        assert!(child.is_ok());
+        assert_ne!(child.unwrap(), master);
     }
 }
