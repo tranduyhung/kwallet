@@ -1,4 +1,4 @@
-use kaspa_bip32::{Language::English, Mnemonic, WordCount::Words24};
+use kaspa_bip32::{ExtendedPrivateKey, Language::English, Mnemonic, SecretKey, WordCount::Words24};
 
 use crate::error::KwalletError;
 
@@ -7,6 +7,14 @@ pub fn generate_mnemonic() -> Result<Mnemonic, KwalletError> {
     let mnemonic = Mnemonic::random(Words24, English)?;
 
     Ok(mnemonic)
+}
+
+/// Derive the root (master) extended private key from a mnemonic, without a passphrase.
+pub fn master_key(mnemonic: &Mnemonic) -> Result<ExtendedPrivateKey<SecretKey>, KwalletError> {
+    let seed = mnemonic.to_seed("");
+    let master = ExtendedPrivateKey::<SecretKey>::new(seed)?;
+
+    Ok(master)
 }
 
 #[cfg(test)]
@@ -33,5 +41,12 @@ mod tests {
         let mnemonic = generate_mnemonic().unwrap();
 
         assert!(Mnemonic::validate(mnemonic.phrase(), Some(English)));
+    }
+
+    #[test]
+    fn master_key_from_generated_mnemonic() {
+        let mnemonic = generate_mnemonic().unwrap();
+
+        assert!(master_key(&mnemonic).is_ok());
     }
 }
