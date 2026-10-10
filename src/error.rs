@@ -9,6 +9,7 @@ pub enum KwalletError {
         actual: NetworkId,
     },
     Bip32(kaspa_bip32::Error),
+    Address(kaspa_addresses::AddressError),
 }
 
 impl fmt::Display for KwalletError {
@@ -20,6 +21,7 @@ impl fmt::Display for KwalletError {
                 "refusing to continue: node is on {actual}, kwallet only supports {expected}"
             ),
             KwalletError::Bip32(e) => write!(f, "key error: {e}"),
+            KwalletError::Address(e) => write!(f, "address error: {e}"),
         }
     }
 }
@@ -41,5 +43,11 @@ impl From<RpcError> for KwalletError {
 impl From<kaspa_bip32::Error> for KwalletError {
     fn from(e: kaspa_bip32::Error) -> Self {
         KwalletError::Bip32(e)
+    }
+}
+
+impl From<kaspa_addresses::AddressError> for KwalletError {
+    fn from(e: kaspa_addresses::AddressError) -> Self {
+        KwalletError::Address(e)
     }
 }

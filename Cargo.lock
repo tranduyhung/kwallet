@@ -2496,6 +2496,7 @@ name = "kwallet"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "kaspa-addresses",
  "kaspa-bip32",
  "kaspa-wrpc-client",
  "tokio",

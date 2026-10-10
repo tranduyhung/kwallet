@@ -1,6 +1,7 @@
 mod amount;
 mod error;
 mod keys;
+mod network;
 mod node;
 
 use amount::{format_sompi, parse_send_amount};
@@ -51,19 +52,12 @@ async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::New => match keys::generate_mnemonic() {
-            Ok(mnemonic) => {
-                println!("DEVNET ONLY: never use this phrase for real funds.");
-                println!("Write it down now; it will not be shown again.");
-                println!();
-                println!("{}", mnemonic.phrase());
-            }
-            Err(e) => {
-                eprintln!("Error occurred while generating phrase: {e}");
-
+        Command::New => {
+            if let Err(e) = new_wallet() {
+                eprintln!("Error occurred while creating new wallet: {e}");
                 return ExitCode::FAILURE;
             }
-        },
+        }
         Command::Balance { address } => match address {
             Some(addr) => println!("balance for {addr}: not implemented yet"),
             None => println!("balance for all wallet addresses: not implemented yet"),
@@ -109,6 +103,23 @@ async fn info(url: &str) -> Result<(), KwalletError> {
     client.disconnect().await?;
 
     println!("disconnected from {url}");
+
+    Ok(())
+}
+
+fn new_wallet() -> Result<(), KwalletError> {
+    let mnemonic = keys::generate_mnemonic()?;
+    let master_key = keys::master_key(&mnemonic)?;
+    let child_key = keys::first_receive_key(master_key)?;
+    let address = keys::receive_address(&child_key)?;
+
+    println!("DEVNET ONLY: never use this phrase for real funds.");
+    println!("Write it down now; it will not be shown again.");
+    println!();
+    println!("{}", mnemonic.phrase());
+    println!();
+    println!("Address: {address}");
+    println!();
 
     Ok(())
 }

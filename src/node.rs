@@ -1,5 +1,6 @@
 use crate::error::KwalletError;
-use kaspa_wrpc_client::prelude::{NetworkId, NetworkType, RpcApi};
+use crate::network::ALLOWED_NETWORK;
+use kaspa_wrpc_client::prelude::{NetworkId, RpcApi};
 use kaspa_wrpc_client::{
     KaspaRpcClient, WrpcEncoding,
     client::{ConnectOptions, ConnectStrategy},
@@ -8,7 +9,6 @@ use kaspa_wrpc_client::{
 use std::time::Duration;
 
 pub const DEFAULT_NODE_URL: &str = "ws://127.0.0.1:17610";
-const ALLOWED_NETWORK: NetworkId = NetworkId::new(NetworkType::Devnet);
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 
 fn check_network(actual: NetworkId) -> Result<(), KwalletError> {
@@ -76,6 +76,8 @@ async fn fetch_verified_info(
 
 #[cfg(test)]
 mod tests {
+    use kaspa_wrpc_client::prelude::NetworkType;
+
     use super::*;
 
     #[test]
