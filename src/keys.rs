@@ -47,6 +47,12 @@ pub fn receive_address(
 mod tests {
     use super::*;
 
+    // Devnet-only test vector, already public: never fund this phrase on mainnet.
+    // Address confirmed independently with kaspa-wallet.
+    const KNOWN_PHRASE: &str = "echo thought memory moral write enact poet scheme group thank latin cabin reduce name artwork faint welcome divide armor sheriff february fatal equal few";
+    const KNOWN_ADDRESS: &str =
+        "kaspadev:qq2ddqsqjn7kxp4h7aef6xtvdcyjsy4awjaqgw5ljalnunpu5hmtcqul5ae0f";
+
     fn derived_key() -> ExtendedPrivateKey<SecretKey> {
         let mnemonic = generate_mnemonic().unwrap();
         let master = master_key(&mnemonic).unwrap();
@@ -131,5 +137,15 @@ mod tests {
         // Skipping the prefix byte leaves x, which must equal the payload.
         // Taking the first 32 bytes instead would include 0x02/0x03 and fail here.
         assert_eq!(address.payload.as_slice(), x);
+    }
+
+    #[test]
+    fn known_phrase_gives_known_address() {
+        let mnemonic = Mnemonic::new(KNOWN_PHRASE, English).unwrap();
+        let master_key = master_key(&mnemonic).unwrap();
+        let child_key = first_receive_key(master_key).unwrap();
+        let address = receive_address(&child_key).unwrap();
+
+        assert_eq!(address.to_string(), KNOWN_ADDRESS);
     }
 }
