@@ -23,8 +23,8 @@ pub fn total_sompi(entries: &[RpcUtxoEntry]) -> Result<u64, KwalletError> {
 }
 
 // Only coinbase (mining reward) outputs need to wait. Normal outputs can be spent right away.
-// A coinbase output is mature once `coinbase_maturity` DAA scores have passed since its block.
-// saturating_sub gives 0 instead of underflowing if the node sends a block score from the future.
+// The UTXOs are fetched after virtual_daa_score, so new blocks can arrive in between.
+// A fresh coinbase can then have a block_daa_score higher than ours. saturating_sub gives 0, so it counts as immature.
 fn is_mature(entry: &RpcUtxoEntry, virtual_daa_score: u64, coinbase_maturity: u64) -> bool {
     !entry.is_coinbase
         || virtual_daa_score.saturating_sub(entry.block_daa_score) >= coinbase_maturity
@@ -161,9 +161,10 @@ mod tests {
         );
     }
 
-    // A bad node could send a block score higher than the current one; that must not underflow.
+    // The UTXOs are fetched a moment after virtual_daa_score, and on a 10 BPS network new blocks
+    // arrive in between. A coinbase from one of those blocks must count as immature, not underflow.
     #[test]
-    fn coinbase_from_the_future_is_immature() {
+    fn coinbase_newer_than_our_daa_score_is_immature() {
         let entries = [coinbase(5, 2_000)];
 
         let balance = split_by_maturity(&entries, 1_000, MATURITY).unwrap();
