@@ -15,6 +15,7 @@ use std::process::ExitCode;
 
 use crate::balance::{Balance, split_by_maturity, total_sompi};
 use crate::network::{coinbase_maturity, parse_address};
+use crate::node::disconnect_or_warn;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -109,9 +110,7 @@ async fn info(url: &str) -> Result<(), KwalletError> {
 
     print_server_info(&server_info);
 
-    client.disconnect().await?;
-
-    println!("disconnected from {url}");
+    disconnect_or_warn(&client, url).await;
 
     Ok(())
 }
@@ -144,12 +143,7 @@ async fn balance(url: &str, address: &str) -> Result<(), KwalletError> {
         .get_utxos_by_addresses(vec![parsed_address.clone()])
         .await;
 
-    match client.disconnect().await {
-        Ok(()) => {}
-        // If the fetch also failed, its error matters more, so only warn about this one.
-        Err(e) if fetched.is_err() => eprintln!("warning: failed to disconnect from {url}: {e}"),
-        Err(e) => return Err(e.into()),
-    }
+    disconnect_or_warn(&client, url).await;
 
     // The node wraps each UTXO with its address and outpoint; we only need the inner entry.
     let entries: Vec<RpcUtxoEntry> = fetched?.into_iter().map(|entry| entry.utxo_entry).collect();

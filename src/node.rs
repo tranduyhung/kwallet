@@ -11,6 +11,14 @@ use std::time::Duration;
 pub const DEFAULT_NODE_URL: &str = "ws://127.0.0.1:17610";
 const CONNECT_TIMEOUT_MS: u64 = 5_000;
 
+/// Disconnects and only warns if that fails.
+/// Read-only commands use this: a failed disconnect doesn't change the answer they already have.
+pub async fn disconnect_or_warn(client: &KaspaRpcClient, url: &str) {
+    if let Err(e) = client.disconnect().await {
+        eprintln!("warning: failed to disconnect from {url}: {e}");
+    }
+}
+
 fn check_network(actual: NetworkId) -> Result<(), KwalletError> {
     if actual == ALLOWED_NETWORK {
         Ok(())
@@ -55,9 +63,7 @@ pub async fn connect_verified(
     match fetch_verified_info(&client).await {
         Ok(info) => Ok((client, info)),
         Err(e) => {
-            if let Err(disconnect_err) = client.disconnect().await {
-                eprintln!("warning: failed to disconnect from {url}: {disconnect_err}");
-            }
+            disconnect_or_warn(&client, url).await;
 
             Err(e)
         }
