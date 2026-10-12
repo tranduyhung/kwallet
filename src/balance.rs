@@ -9,6 +9,15 @@ pub struct Balance {
     pub immature: u64,
 }
 
+impl Balance {
+    /// Mature plus immature, failing instead of overflowing.
+    pub fn total(&self) -> Result<u64, KwalletError> {
+        self.mature
+            .checked_add(self.immature)
+            .ok_or(KwalletError::BalanceOverflow)
+    }
+}
+
 // Adds up all the amounts. Returns an error if the total is too big for a u64.
 // We don't trust the node, so we check every addition.
 // A plain .sum() would crash on overflow in debug builds and give a wrong number in release builds.
@@ -16,10 +25,6 @@ fn checked_sum(mut amounts: impl Iterator<Item = u64>) -> Result<u64, KwalletErr
     amounts
         .try_fold(0u64, |total, amount| total.checked_add(amount)) // Start at 0 and add each amount. Stop at the first overflow.
         .ok_or(KwalletError::BalanceOverflow) // Turn the Option into a Result.
-}
-
-pub fn total_sompi(entries: &[RpcUtxoEntry]) -> Result<u64, KwalletError> {
-    checked_sum(entries.iter().map(|entry| entry.amount))
 }
 
 // Only coinbase (mining reward) outputs need to wait. Normal outputs can be spent right away.
@@ -35,19 +40,13 @@ pub fn split_by_maturity(
     virtual_daa_score: u64,
     coinbase_maturity: u64,
 ) -> Result<Balance, KwalletError> {
-    let mature = checked_sum(
-        entries
-            .iter()
-            .filter(|entry| is_mature(entry, virtual_daa_score, coinbase_maturity))
-            .map(|entry| entry.amount),
-    )?;
+    // One pass: each entry goes into exactly one of the two lists.
+    let (mature, immature): (Vec<&RpcUtxoEntry>, Vec<&RpcUtxoEntry>) = entries
+        .iter()
+        .partition(|entry| is_mature(entry, virtual_daa_score, coinbase_maturity));
 
-    let immature = checked_sum(
-        entries
-            .iter()
-            .filter(|entry| !is_mature(entry, virtual_daa_score, coinbase_maturity))
-            .map(|entry| entry.amount),
-    )?;
+    let mature = checked_sum(mature.iter().map(|entry| entry.amount))?;
+    let immature = checked_sum(immature.iter().map(|entry| entry.amount))?;
 
     Ok(Balance { mature, immature })
 }
@@ -77,32 +76,53 @@ mod tests {
     }
 
     #[test]
-    fn total_of_no_entries_is_zero() {
-        assert!(matches!(total_sompi(&[]), Ok(0)))
+    fn no_entries_is_zero() {
+        let balance = split_by_maturity(&[], 0, MATURITY).unwrap();
+
+        assert_eq!(balance.total().unwrap(), 0);
     }
 
     #[test]
     fn total_adds_all_amounts() {
         let entries = [entry(100_000_000), entry(50_000_000), entry(1)];
 
-        assert_eq!(total_sompi(&entries).unwrap(), 150_000_001);
+        let balance = split_by_maturity(&entries, 0, MATURITY).unwrap();
+
+        assert_eq!(balance.total().unwrap(), 150_000_001);
     }
 
     // A total of exactly u64::MAX still fits, so this must work.
     #[test]
     fn total_reaches_u64_max() {
-        let entries = [entry(u64::MAX - 1), entry(1)];
+        let balance = Balance {
+            mature: u64::MAX - 1,
+            immature: 1,
+        };
 
-        assert_eq!(total_sompi(&entries).unwrap(), u64::MAX);
+        assert_eq!(balance.total().unwrap(), u64::MAX);
     }
 
-    // Each amount is a bit more than half of u64::MAX, so the total is too big.
+    // Each group fits on its own, but together they are too big.
     #[test]
     fn total_rejects_overflow() {
+        let balance = Balance {
+            mature: u64::MAX / 2 + 1,
+            immature: u64::MAX / 2 + 1,
+        };
+
+        assert!(matches!(
+            balance.total(),
+            Err(KwalletError::BalanceOverflow)
+        ));
+    }
+
+    // Each amount is a bit more than half of u64::MAX, so one group alone is too big.
+    #[test]
+    fn split_rejects_overflow_in_one_group() {
         let entries = [entry(u64::MAX / 2 + 1), entry(u64::MAX / 2 + 1)];
 
         assert!(matches!(
-            total_sompi(&entries),
+            split_by_maturity(&entries, 0, MATURITY),
             Err(KwalletError::BalanceOverflow)
         ));
     }
@@ -192,9 +212,6 @@ mod tests {
                 immature: 300
             }
         );
-        assert_eq!(
-            balance.mature + balance.immature,
-            total_sompi(&entries).unwrap()
-        );
+        assert_eq!(balance.total().unwrap(), 321);
     }
 }

@@ -13,7 +13,7 @@ use clap::{Parser, Subcommand};
 use kaspa_wrpc_client::prelude::{GetServerInfoResponse, RpcApi, RpcUtxoEntry};
 use std::process::ExitCode;
 
-use crate::balance::{Balance, split_by_maturity, total_sompi};
+use crate::balance::split_by_maturity;
 use crate::network::{coinbase_maturity, parse_address};
 use crate::node::disconnect_or_warn;
 
@@ -148,9 +148,8 @@ async fn balance(url: &str, address: &str) -> Result<(), KwalletError> {
     // The node wraps each UTXO with its address and outpoint; we only need the inner entry.
     let entries: Vec<RpcUtxoEntry> = fetched?.into_iter().map(|entry| entry.utxo_entry).collect();
 
-    let total = total_sompi(&entries)?;
-    let Balance { mature, immature } =
-        split_by_maturity(&entries, server_info.virtual_daa_score, coinbase_maturity())?;
+    let balance = split_by_maturity(&entries, server_info.virtual_daa_score, coinbase_maturity())?;
+    let total = balance.total()?;
 
     println!("Address: {parsed_address}");
     println!(
@@ -158,8 +157,8 @@ async fn balance(url: &str, address: &str) -> Result<(), KwalletError> {
         format_sompi(total),
         entries.len()
     );
-    println!("  Mature:   {} KAS", format_sompi(mature));
-    println!("  Immature: {} KAS", format_sompi(immature));
+    println!("  Mature:   {} KAS", format_sompi(balance.mature));
+    println!("  Immature: {} KAS", format_sompi(balance.immature));
 
     Ok(())
 }
