@@ -2498,6 +2498,7 @@ dependencies = [
  "clap",
  "kaspa-addresses",
  "kaspa-bip32",
+ "kaspa-consensus-core",
  "kaspa-wrpc-client",
  "tokio",
 ]

@@ -1,3 +1,4 @@
+use kaspa_addresses::Prefix;
 use kaspa_wrpc_client::prelude::{NetworkId, RpcError};
 use std::{error::Error, fmt};
 
@@ -10,6 +11,11 @@ pub enum KwalletError {
     },
     Bip32(kaspa_bip32::Error),
     Address(kaspa_addresses::AddressError),
+    WrongAddressNetwork {
+        expected: Prefix,
+        actual: Prefix,
+    },
+    BalanceOverflow,
 }
 
 impl fmt::Display for KwalletError {
@@ -22,6 +28,13 @@ impl fmt::Display for KwalletError {
             ),
             KwalletError::Bip32(e) => write!(f, "key error: {e}"),
             KwalletError::Address(e) => write!(f, "address error: {e}"),
+            KwalletError::WrongAddressNetwork { expected, actual } => write!(
+                f,
+                "refusing to continue: expected network {expected}, got {actual}"
+            ),
+            KwalletError::BalanceOverflow => {
+                write!(f, "balance overflows u64: the node sent impossible amounts")
+            }
         }
     }
 }

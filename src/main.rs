@@ -1,4 +1,5 @@
 mod amount;
+mod balance;
 mod error;
 mod keys;
 mod network;
@@ -9,8 +10,11 @@ use error::KwalletError;
 use node::{DEFAULT_NODE_URL, connect_verified};
 
 use clap::{Parser, Subcommand};
-use kaspa_wrpc_client::prelude::GetServerInfoResponse;
+use kaspa_wrpc_client::prelude::{GetServerInfoResponse, RpcApi, RpcUtxoEntry};
 use std::process::ExitCode;
+
+use crate::balance::{Balance, split_by_maturity, total_sompi};
+use crate::network::{coinbase_maturity, parse_address};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -25,10 +29,13 @@ struct Cli {
 enum Command {
     /// Create a new wallet
     New,
-    /// Get the balance of a wallet address, or all addresses if none is specified
+    /// Get the balance of a wallet address
     Balance {
         /// Wallet address
-        address: Option<String>,
+        address: String,
+        /// URL of the KAS node to connect to
+        #[arg(long, value_name = "URL", default_value = DEFAULT_NODE_URL)]
+        url: String,
     },
     /// Send KAS from the wallet to an address
     Send {
@@ -58,10 +65,12 @@ async fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         }
-        Command::Balance { address } => match address {
-            Some(addr) => println!("balance for {addr}: not implemented yet"),
-            None => println!("balance for all wallet addresses: not implemented yet"),
-        },
+        Command::Balance { url, address } => {
+            if let Err(e) = balance(&url, &address).await {
+                eprintln!("Error occured while fetching balance for {address}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
         Command::Send { to, amount_sompi } => println!(
             "send {} to {}: not implemented yet",
             format_sompi(amount_sompi),
@@ -124,6 +133,43 @@ fn new_wallet() -> Result<(), KwalletError> {
     Ok(())
 }
 
+async fn balance(url: &str, address: &str) -> Result<(), KwalletError> {
+    // Check the address first, so a wrong-network address never touches the network.
+    let parsed_address = parse_address(address)?;
+
+    let (client, server_info) = connect_verified(url).await?;
+
+    // No "?" here, we must disconnect even if the fetch fails.
+    let fetched = client
+        .get_utxos_by_addresses(vec![parsed_address.clone()])
+        .await;
+
+    match client.disconnect().await {
+        Ok(()) => {}
+        // If the fetch also failed, its error matters more, so only warn about this one.
+        Err(e) if fetched.is_err() => eprintln!("warning: failed to disconnect from {url}: {e}"),
+        Err(e) => return Err(e.into()),
+    }
+
+    // The node wraps each UTXO with its address and outpoint; we only need the inner entry.
+    let entries: Vec<RpcUtxoEntry> = fetched?.into_iter().map(|entry| entry.utxo_entry).collect();
+
+    let total = total_sompi(&entries)?;
+    let Balance { mature, immature } =
+        split_by_maturity(&entries, server_info.virtual_daa_score, coinbase_maturity())?;
+
+    println!("Address: {parsed_address}");
+    println!(
+        "Balance: {} KAS ({} UTXOs)",
+        format_sompi(total),
+        entries.len()
+    );
+    println!("  Mature:   {} KAS", format_sompi(mature));
+    println!("  Immature: {} KAS", format_sompi(immature));
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,7 +182,7 @@ mod tests {
 
     #[test]
     fn reject_invalid_commands() {
-        let cases: [(&[&str], ErrorKind); 5] = [
+        let cases: [(&[&str], ErrorKind); 6] = [
             (
                 &["kwallet", "send", "address"],
                 ErrorKind::MissingRequiredArgument,
@@ -151,6 +197,7 @@ mod tests {
                 &["kwallet", "send", "addr", "abc"],
                 ErrorKind::ValueValidation,
             ),
+            (&["kwallet", "balance"], ErrorKind::MissingRequiredArgument),
         ];
 
         for (args, expected) in cases {
@@ -165,13 +212,17 @@ mod tests {
 
         assert_eq!(parse(&["kwallet", "new"]), Command::New);
         assert_eq!(
-            parse(&["kwallet", "balance"]),
-            Command::Balance { address: None }
-        );
-        assert_eq!(
             parse(&["kwallet", "balance", "addr"]),
             Command::Balance {
-                address: Some("addr".to_string())
+                address: "addr".to_string(),
+                url: DEFAULT_NODE_URL.to_string()
+            }
+        );
+        assert_eq!(
+            parse(&["kwallet", "balance", "addr", "--url", "ws://node:1234"]),
+            Command::Balance {
+                address: "addr".to_string(),
+                url: "ws://node:1234".to_string()
             }
         );
         assert_eq!(
