@@ -68,7 +68,7 @@ async fn main() -> ExitCode {
         }
         Command::Balance { url, address } => {
             if let Err(e) = balance(&url, &address).await {
-                eprintln!("Error occured while fetching balance for {address}: {e}");
+                eprintln!("Error occurred while fetching balance for {address}: {e}");
                 return ExitCode::FAILURE;
             }
         }
