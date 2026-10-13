@@ -81,6 +81,8 @@ pub fn build_transaction(
     let inputs: Vec<TransactionInput> = selection
         .coins
         .iter()
+        // sig_op_count is 1 because our pay-to-pubkey script does one Schnorr signature check.
+        // sign() sets this field again anyway, and also fills in the empty signature_script.
         .map(|coin| TransactionInput::new(coin.outpoint, vec![], 0, 1))
         .collect();
 
@@ -260,9 +262,8 @@ mod tests {
         assert_eq!(tx.tx.outputs[0].value, 5);
     }
 
-    #[test]
     // Guards against dropping the change output, which would hand it to the miner as fee.
-
+    #[test]
     fn inputs_minus_outputs_equals_fee() {
         let fee = 1_000;
         let coins = [coin(3 * KAS, 1), coin(4 * KAS, 2)];
