@@ -4,6 +4,7 @@ mod error;
 mod keys;
 mod network;
 mod node;
+mod send;
 
 use amount::{format_sompi, parse_send_amount};
 use error::KwalletError;

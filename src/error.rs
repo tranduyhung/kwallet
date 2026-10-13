@@ -2,6 +2,8 @@ use kaspa_addresses::Prefix;
 use kaspa_wrpc_client::prelude::{NetworkId, RpcError};
 use std::{error::Error, fmt};
 
+use crate::amount::format_sompi;
+
 #[derive(Debug)]
 pub enum KwalletError {
     Rpc(Box<kaspa_wrpc_client::error::Error>),
@@ -16,6 +18,11 @@ pub enum KwalletError {
         actual: Prefix,
     },
     BalanceOverflow,
+    InsufficientFunds {
+        available: u64,
+        needed: u64,
+    },
+    AmountOverflow,
 }
 
 impl fmt::Display for KwalletError {
@@ -35,6 +42,13 @@ impl fmt::Display for KwalletError {
             KwalletError::BalanceOverflow => {
                 write!(f, "balance overflows u64: the node sent impossible amounts")
             }
+            KwalletError::InsufficientFunds { available, needed } => write!(
+                f,
+                "insufficient funds: need {} KAS (amount + fee), have {} KAS spendable",
+                format_sompi(*needed),
+                format_sompi(*available)
+            ),
+            KwalletError::AmountOverflow => write!(f, "amount plus fee overflows u64"),
         }
     }
 }
