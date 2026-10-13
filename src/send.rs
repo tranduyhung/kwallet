@@ -1,6 +1,15 @@
 use std::cmp::Reverse;
 
-use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
+use kaspa_addresses::Address;
+use kaspa_consensus_core::{
+    constants::TX_VERSION,
+    subnets::SUBNETWORK_ID_NATIVE,
+    tx::{
+        SignableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
+        UtxoEntry,
+    },
+};
+use kaspa_txscript::pay_to_address_script;
 
 use crate::error::KwalletError;
 
@@ -57,8 +66,52 @@ pub fn select_coins(coins: &[Coin], amount: u64, fee: u64) -> Result<Selection, 
     })
 }
 
+/// Build the unsigned transaction for a selection. The signature scripts stay empty until signing.
+pub fn build_transaction(
+    selection: &Selection,
+    recipient: &Address,
+    amount: u64,
+    change_address: &Address,
+) -> SignableTransaction {
+    let inputs: Vec<TransactionInput> = selection
+        .coins
+        .iter()
+        .map(|coin| TransactionInput::new(coin.outpoint, vec![], 0, 1))
+        .collect();
+
+    let mut outputs = vec![TransactionOutput::new(
+        amount,
+        pay_to_address_script(recipient),
+    )];
+    if let Some(change) = selection.change {
+        outputs.push(TransactionOutput::new(
+            change,
+            pay_to_address_script(change_address),
+        ));
+    }
+
+    let tx = Transaction::new(
+        TX_VERSION,
+        inputs,
+        outputs,
+        0,
+        SUBNETWORK_ID_NATIVE,
+        0,
+        vec![],
+    );
+
+    // The signer needs each input's UTXO entry, in the same order as the inputs.
+    let entries = selection
+        .coins
+        .iter()
+        .map(|coin| coin.entry.clone())
+        .collect();
+    SignableTransaction::with_entries(tx, entries)
+}
+
 #[cfg(test)]
 mod tests {
+    use kaspa_addresses::{Prefix, Version};
     use kaspa_consensus_core::{Hash, tx::ScriptPublicKey};
 
     use super::*;
@@ -71,6 +124,10 @@ mod tests {
             outpoint: TransactionOutpoint::new(Hash::from_u64_word(id), 0),
             entry: UtxoEntry::new(amount, ScriptPublicKey::default(), 0, false, None),
         }
+    }
+
+    fn address(byte: u8) -> Address {
+        Address::new(Prefix::Devnet, Version::PubKey, &[byte; 32])
     }
 
     #[test]
@@ -152,5 +209,62 @@ mod tests {
             select_coins(&coins, u64::MAX, 0),
             Err(KwalletError::BalanceOverflow)
         ))
+    }
+
+    #[test]
+    fn one_input_per_selected_coin() {
+        let coins = [coin(3, 1), coin(4, 2), coin(5, 3)];
+        let selection = select_coins(&coins, 10, 1).unwrap();
+
+        let tx = build_transaction(&selection, &address(1), 10, &address(2));
+
+        assert_eq!(tx.tx.inputs.len(), selection.coins.len());
+        assert_eq!(tx.entries.len(), selection.coins.len());
+    }
+
+    #[test]
+    fn outputs_pay_recipient_then_change() {
+        let coins = [coin(10 * KAS, 1)];
+        let selection = select_coins(&coins, 3 * KAS, 1_000).unwrap();
+        let recipient = address(1);
+        let me = address(2);
+
+        let tx = build_transaction(&selection, &recipient, 3 * KAS, &me);
+
+        let outputs = &tx.tx.outputs;
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].value, 3 * KAS);
+        assert_eq!(
+            outputs[0].script_public_key,
+            pay_to_address_script(&recipient)
+        );
+        assert_eq!(outputs[1].value, 7 * KAS - 1_000);
+        assert_eq!(outputs[1].script_public_key, pay_to_address_script(&me));
+    }
+
+    #[test]
+    fn no_change_output_without_change() {
+        let coins = [coin(6, 1)];
+        let selection = select_coins(&coins, 5, 1).unwrap();
+
+        let tx = build_transaction(&selection, &address(1), 5, &address(2));
+
+        assert_eq!(tx.tx.outputs.len(), 1);
+        assert_eq!(tx.tx.outputs[0].value, 5);
+    }
+
+    #[test]
+    // Guards against dropping the change output, which would hand it to the miner as fee.
+
+    fn inputs_minus_outputs_equals_fee() {
+        let fee = 1_000;
+        let coins = [coin(3 * KAS, 1), coin(4 * KAS, 2)];
+        let selection = select_coins(&coins, 5 * KAS, fee).unwrap();
+
+        let tx = build_transaction(&selection, &address(1), 5 * KAS, &address(2));
+
+        let total_in: u64 = tx.entries.iter().map(|e| e.as_ref().unwrap().amount).sum();
+        let total_out: u64 = tx.tx.outputs.iter().map(|o| o.value).sum();
+        assert_eq!(total_in - total_out, fee);
     }
 }

@@ -2499,6 +2499,7 @@ dependencies = [
  "kaspa-addresses",
  "kaspa-bip32",
  "kaspa-consensus-core",
+ "kaspa-txscript",
  "kaspa-wrpc-client",
  "tokio",
 ]
