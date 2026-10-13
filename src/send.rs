@@ -24,6 +24,10 @@ pub struct Coin {
 #[derive(Debug, PartialEq)]
 pub struct Selection {
     pub coins: Vec<Coin>,
+    /// What the recipient gets, in sompi.
+    pub amount: u64,
+    /// What the miner gets, in sompi.
+    pub fee: u64,
     /// `None` means no change output. Outputs must be non-zero, so this is never `Some(0)`.
     pub change: Option<u64>,
 }
@@ -54,6 +58,8 @@ pub fn select_coins(coins: &[Coin], amount: u64, fee: u64) -> Result<Selection, 
             let change = total - needed;
             return Ok(Selection {
                 coins: selected,
+                amount,
+                fee,
                 change: (change > 0).then_some(change),
             });
         }
@@ -70,7 +76,6 @@ pub fn select_coins(coins: &[Coin], amount: u64, fee: u64) -> Result<Selection, 
 pub fn build_transaction(
     selection: &Selection,
     recipient: &Address,
-    amount: u64,
     change_address: &Address,
 ) -> SignableTransaction {
     let inputs: Vec<TransactionInput> = selection
@@ -80,7 +85,7 @@ pub fn build_transaction(
         .collect();
 
     let mut outputs = vec![TransactionOutput::new(
-        amount,
+        selection.amount,
         pay_to_address_script(recipient),
     )];
     if let Some(change) = selection.change {
@@ -140,6 +145,8 @@ mod tests {
             selection,
             Selection {
                 coins: vec![coin(6, 1)],
+                amount: 5,
+                fee: 1,
                 change: None
             }
         );
@@ -216,7 +223,7 @@ mod tests {
         let coins = [coin(3, 1), coin(4, 2), coin(5, 3)];
         let selection = select_coins(&coins, 10, 1).unwrap();
 
-        let tx = build_transaction(&selection, &address(1), 10, &address(2));
+        let tx = build_transaction(&selection, &address(1), &address(2));
 
         assert_eq!(tx.tx.inputs.len(), selection.coins.len());
         assert_eq!(tx.entries.len(), selection.coins.len());
@@ -229,7 +236,7 @@ mod tests {
         let recipient = address(1);
         let me = address(2);
 
-        let tx = build_transaction(&selection, &recipient, 3 * KAS, &me);
+        let tx = build_transaction(&selection, &recipient, &me);
 
         let outputs = &tx.tx.outputs;
         assert_eq!(outputs.len(), 2);
@@ -247,7 +254,7 @@ mod tests {
         let coins = [coin(6, 1)];
         let selection = select_coins(&coins, 5, 1).unwrap();
 
-        let tx = build_transaction(&selection, &address(1), 5, &address(2));
+        let tx = build_transaction(&selection, &address(1), &address(2));
 
         assert_eq!(tx.tx.outputs.len(), 1);
         assert_eq!(tx.tx.outputs[0].value, 5);
@@ -261,7 +268,7 @@ mod tests {
         let coins = [coin(3 * KAS, 1), coin(4 * KAS, 2)];
         let selection = select_coins(&coins, 5 * KAS, fee).unwrap();
 
-        let tx = build_transaction(&selection, &address(1), 5 * KAS, &address(2));
+        let tx = build_transaction(&selection, &address(1), &address(2));
 
         let total_in: u64 = tx.entries.iter().map(|e| e.as_ref().unwrap().amount).sum();
         let total_out: u64 = tx.tx.outputs.iter().map(|o| o.value).sum();
