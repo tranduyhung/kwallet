@@ -23,6 +23,9 @@ pub enum KwalletError {
         needed: u64,
     },
     AmountOverflow,
+    Signing(kaspa_consensus_core::sign::Error),
+    MassIncomputable,
+    FeeDidNotSettle,
 }
 
 impl fmt::Display for KwalletError {
@@ -49,6 +52,13 @@ impl fmt::Display for KwalletError {
                 format_sompi(*available)
             ),
             KwalletError::AmountOverflow => write!(f, "amount plus fee overflows u64"),
+            KwalletError::Signing(e) => write!(f, "signature check failed: {e}"),
+            KwalletError::MassIncomputable => {
+                write!(f, "transaction mass cannot be computed (zero-value output?")
+            }
+            KwalletError::FeeDidNotSettle => {
+                write!(f, "fee kept rising after serverl rounds of coin selection")
+            }
         }
     }
 }
@@ -76,5 +86,11 @@ impl From<kaspa_bip32::Error> for KwalletError {
 impl From<kaspa_addresses::AddressError> for KwalletError {
     fn from(e: kaspa_addresses::AddressError) -> Self {
         KwalletError::Address(e)
+    }
+}
+
+impl From<kaspa_consensus_core::sign::Error> for KwalletError {
+    fn from(e: kaspa_consensus_core::sign::Error) -> Self {
+        KwalletError::Signing(e)
     }
 }

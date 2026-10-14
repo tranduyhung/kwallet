@@ -1,8 +1,17 @@
 use std::cmp::Reverse;
 
+use crate::keys::{first_receive_key, generate_mnemonic, master_key, receive_address};
 use kaspa_addresses::Address;
+use kaspa_bip32::{
+    ExtendedPrivateKey, SecretKey,
+    secp256k1::{Keypair, Secp256k1},
+};
 use kaspa_consensus_core::{
+    Hash,
+    config::params::Params,
     constants::TX_VERSION,
+    mass::{Mass, MassCalculator},
+    sign::{sign, verify},
     subnets::SUBNETWORK_ID_NATIVE,
     tx::{
         SignableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
@@ -11,7 +20,10 @@ use kaspa_consensus_core::{
 };
 use kaspa_txscript::pay_to_address_script;
 
-use crate::error::KwalletError;
+use crate::{error::KwalletError, network::ALLOWED_NETWORK};
+
+/// How many select-build-sign rounds `create_send` stries before giving up.
+const MAX_FEE_ROUNDS: usize = 10;
 
 /// A spendable (mature) UTXO: how much it holds and where it lives.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +128,72 @@ pub fn build_transaction(
     SignableTransaction::with_entries(tx, entries)
 }
 
+pub fn sign_transaction(
+    tx: SignableTransaction,
+    key: &ExtendedPrivateKey<SecretKey>,
+) -> Result<SignableTransaction, KwalletError> {
+    let keypair = Keypair::from_secret_key(&Secp256k1::new(), key.private_key());
+    let signed = sign(tx, keypair);
+    verify(&signed.as_verifiable())?;
+
+    Ok(signed)
+}
+
+/// The mass the network charges for a signed transaction: the largest of its compute,
+/// transient and storage masses, each scaled to the compute-mass unit.
+pub fn transaction_mass(tx: &SignableTransaction) -> Result<u64, KwalletError> {
+    let params = Params::from(ALLOWED_NETWORK);
+    let calculator = MassCalculator::new_with_consensus_params(&params);
+
+    let non_contextual = calculator.calc_non_contextual_masses(&tx.tx);
+    let contextual = calculator
+        .calc_contextual_masses(&tx.as_verifiable())
+        .ok_or(KwalletError::MassIncomputable)?;
+
+    Ok(Mass::new(non_contextual, contextual).normalized_max(&params.block_mass_cofactors()))
+}
+
+/// Fee in sompi for `mass` grams at `feerate` sompi per gram, rounded up.
+fn fee_for(mass: u64, feerate: f64) -> u64 {
+    (mass as f64 * feerate).ceil() as u64
+}
+
+/// Select coins, build and sign a transaction that pays `amount` to `recipient`
+/// with a fee of at lease mass x `feerate`.
+///
+/// `feerate` is in sompi per gram and must be finite and non-negative.
+pub fn create_send(
+    coins: &[Coin],
+    amount: u64,
+    recipient: &Address,
+    change_address: &Address,
+    key: &ExtendedPrivateKey<SecretKey>,
+    feerate: f64,
+) -> Result<SignableTransaction, KwalletError> {
+    // Mass depends on the transaction and the fee changes the transaction: a higher fee can pull
+    // in another coin (more inputs, more mass) or shrink the change (more storage mass). So we
+    // repeat select-build-sign until the fee we paid covers the mass of what we built. A fixed
+    // margin could still come up short, and an error would reject sends that one more round fixes.
+    // The fee only ever goes up, so this ends with a match or InsufficientFunds. The round cap
+    // is a safety net against a fee that creeps up by tiny steps.
+    let mut fee = 0;
+    for _ in 0..MAX_FEE_ROUNDS {
+        let selection = select_coins(coins, amount, fee)?;
+        let tx = sign_transaction(
+            build_transaction(&selection, recipient, change_address),
+            key,
+        )?;
+
+        let required = fee_for(transaction_mass(&tx)?, feerate);
+        if fee >= required {
+            return Ok(tx);
+        }
+        fee = required;
+    }
+
+    Err(KwalletError::FeeDidNotSettle)
+}
+
 #[cfg(test)]
 mod tests {
     use kaspa_addresses::{Prefix, Version};
@@ -135,6 +213,27 @@ mod tests {
 
     fn address(byte: u8) -> Address {
         Address::new(Prefix::Devnet, Version::PubKey, &[byte; 32])
+    }
+
+    // A fresh random key. Every call gives a different one.
+    fn new_key() -> ExtendedPrivateKey<SecretKey> {
+        let master = master_key(&generate_mnemonic().unwrap()).unwrap();
+        first_receive_key(master).unwrap()
+    }
+
+    // A coin locked to `key`'s address, so a signature by `key` can unblock it.
+    fn owned_coin(amount: u64, id: u64, key: &ExtendedPrivateKey<SecretKey>) -> Coin {
+        let script = pay_to_address_script(&receive_address(key).unwrap());
+        Coin {
+            outpoint: TransactionOutpoint::new(Hash::from_u64_word(id), 0),
+            entry: UtxoEntry::new(amount, script, 0, false, None),
+        }
+    }
+
+    fn fee_paid(tx: &SignableTransaction) -> u64 {
+        let total_in: u64 = tx.entries.iter().map(|e| e.as_ref().unwrap().amount).sum();
+        let total_out: u64 = tx.tx.outputs.iter().map(|o| o.value).sum();
+        total_in - total_out
     }
 
     #[test]
@@ -274,5 +373,106 @@ mod tests {
         let total_in: u64 = tx.entries.iter().map(|e| e.as_ref().unwrap().amount).sum();
         let total_out: u64 = tx.tx.outputs.iter().map(|o| o.value).sum();
         assert_eq!(total_in - total_out, fee);
+    }
+
+    #[test]
+    fn signed_transaction_passes_verify() {
+        let key = new_key();
+        let coins = [owned_coin(10 * KAS, 1, &key), owned_coin(5 * KAS, 2, &key)];
+        let selection = select_coins(&coins, 12 * KAS, 1_000).unwrap();
+        let unsigned = build_transaction(&selection, &address(1), &address(2));
+
+        let signed = sign_transaction(unsigned, &key).unwrap();
+
+        assert!(verify(&signed.as_verifiable()).is_ok());
+        assert!(
+            signed
+                .tx
+                .inputs
+                .iter()
+                .all(|i| !i.signature_script.is_empty())
+        );
+    }
+
+    #[test]
+    fn signing_with_another_key_fails_verify() {
+        let owner = new_key();
+        let thief = new_key();
+        let coins = [owned_coin(10 * KAS, 1, &owner)];
+        let selection = select_coins(&coins, 3 * KAS, 1_000).unwrap();
+        let unsigned = build_transaction(&selection, &address(1), &address(2));
+
+        assert!(matches!(
+            sign_transaction(unsigned, &thief),
+            Err(KwalletError::Signing(_))
+        ));
+    }
+
+    #[test]
+    fn fee_covers_mass_times_feerate() {
+        let key = new_key();
+        let coins = [owned_coin(10 * KAS, 1, &key)];
+        let feerate = 1.5;
+
+        let tx = create_send(&coins, 3 * KAS, &address(1), &address(2), &key, feerate).unwrap();
+
+        let mass = transaction_mass(&tx).unwrap();
+        assert!(fee_paid(&tx) >= fee_for(mass, feerate));
+        assert_eq!(tx.tx.outputs[0].value, 3 * KAS);
+    }
+
+    // With no fee, one coin pays the amount exactly. The real fee then needs a second coin,
+    // which adds mass, so the fee from the first round is too low and another round must run.
+    #[test]
+    fn fee_still_covers_mass_when_a_second_coin_is_needed() {
+        let key = new_key();
+        let coins = [owned_coin(KAS, 1, &key), owned_coin(KAS, 2, &key)];
+        let feerate = 1.0;
+
+        let tx = create_send(&coins, KAS, &address(1), &address(2), &key, feerate).unwrap();
+
+        assert_eq!(tx.tx.inputs.len(), 2);
+        let mass = transaction_mass(&tx).unwrap();
+        assert!(fee_paid(&tx) >= fee_for(mass, feerate));
+    }
+
+    #[test]
+    fn zero_feerate_means_zero_fee() {
+        let key = new_key();
+        let coins = [owned_coin(10 * KAS, 1, &key)];
+
+        let tx = create_send(&coins, 3 * KAS, &address(1), &address(2), &key, 0.0).unwrap();
+
+        assert_eq!(fee_paid(&tx), 0);
+    }
+
+    // Sending 1 KAS from a 1.00001 KAS coin leaves 1_000 sompi of change. Storage mass grows
+    // with 1 / output value, so that tiny output makes the transaction enormously heavy.
+    #[test]
+    fn tiny_change_makes_storage_mass_explode() {
+        let key = new_key();
+        let coins = [owned_coin(KAS + 1_000, 1, &key)];
+
+        let selection = select_coins(&coins, KAS, 0).unwrap();
+        assert_eq!(selection.change, Some(1_000));
+        let tx = sign_transaction(
+            build_transaction(&selection, &address(1), &address(2)),
+            &key,
+        )
+        .unwrap();
+        let calculator = MassCalculator::new_with_consensus_params(&Params::from(ALLOWED_NETWORK));
+        let storage_mass = calculator
+            .calc_contextual_masses(&tx.as_verifiable())
+            .unwrap()
+            .storage_mass;
+        let compute_mass = calculator.calc_non_contextual_masses(&tx.tx).compute_mass;
+        println!("storage mass: {storage_mass}, compute mass: {compute_mass}");
+
+        assert!(storage_mass > 100 * compute_mass);
+        // At 1 sompi/gram the fee alone would be ~10 KAS, far more than the coin holds.
+        assert!(matches!(
+            create_send(&coins, KAS, &address(1), &address(2), &key, 1.0),
+            Err(KwalletError::InsufficientFunds { .. })
+        ));
     }
 }
